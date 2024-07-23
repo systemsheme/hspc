@@ -11,10 +11,10 @@ meet the biological demands of the human body. Human MPPs remain ill-defined whe
 ### Key Points: 
 MPPs are ill defined, as functionally distinct human MPPs akin to those in mouse hematopoiesis have yet to be identified. Over the past few years, several studies have utilized single cell methods for studying hematopoiesis, however, rigorous isolation and functional characterization of distinct MPPs in human adults has yet to be accomplished. This limitation impairs the ability to study adult blood disorders and accurately interpret results derived from the mouse model. Here, we performed a systematic evaluation of primary adult human bone marrow cells using single cell methods and complimentary functional assays to identify molecularly and functionally distinct progenitors. As a result, we identify new adult human MPPs and oligopotent progenitors (OPPs) and show the potential benefits of using this framework for future studies.
 
-> We provide specific immunophenotypes for newly defined MPPs and OPPs in adult human hematopoiesis, and a new sorting strategy for the isolation and study of these important cells.
-> We present a rigorous framework for using multiomic, multi-platform, and multi-species single cell technologies in the study of hematopoiesis. As a result, we provide an extended biomolecular characterization of these new HSPCs and a framework for utilizing this reference in future research that can be applied across organ systems.
-> We show how adult MPPs and OPPs are molecularly distinct from human cord blood and have limited homology with mouse HSPCs.
-> We identify accurate HSPC specific gene signatures that are associated with human aging.
+1. We provide specific immunophenotypes for newly defined MPPs and OPPs in adult human hematopoiesis, and a new sorting strategy for the isolation and study of these important cells.
+2. We present a rigorous framework for using multiomic, multi-platform, and multi-species single cell technologies in the study of hematopoiesis. As a result, we provide an extended biomolecular characterization of these new HSPCs and a framework for utilizing this reference in future research that can be applied across organ systems.
+3. We show how adult MPPs and OPPs are molecularly distinct from human cord blood and have limited homology with mouse HSPCs.
+4. We identify accurate HSPC specific gene signatures that are associated with human aging.
 
 **Data Access:** The raw data for the newly generated single cell data will be deposited in dbGaP under accession phs003690.v1.p1 and the processed UMI tables are available under GEO accession GSE262440.  
 
