@@ -1,0 +1,314 @@
+---
+title: "01_PreProcessing_QC_Integration"
+format: html
+author: Asiri Ediriwickrema
+date: "2024-07-24"
+---
+
+## Introduction
+
+High level description of pre-processing steps used to generate the reference single cell dataset.
+
+## Environment
+
+R version 4.3.3 (2024-02-29)
+
+## Load Libraries
+
+```{r libraries, message = FALSE, warning = FALSE, results = 'hide'}
+loadlib=function(){
+  library(Seurat)
+  library(SoupX)
+  library(stringi)
+  library(cowplot)
+  library(dplyr)
+  library(future)
+  library(DoubletFinder)
+  library(ggplot2)
+  library(mixtools)
+  print("all lib loaded")
+}
+suppressMessages(loadlib())
+```
+
+# General workflow
+
+1.  Upload data sets and create Seurat objects
+
+<!-- -->
+
+a.  Create Seurat objects with the following assays:
+b.  Run doublet finder and remove doublets
+c.  Run SoupX
+d.  Add SoupX corrected assays
+
+<!-- -->
+
+2.  Remove cells with conflicting surface markers
+3.  Remove lymphocytes
+4.  Integrate
+
+## Upload data
+
+```{R}
+datalist <- list()
+
+datalist[['h1']] <- read.table('Healthy1-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+datalist[['h2']]  <- read.table('Healthy2-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+datalist[['h3']]  <- read.table('Healthy3-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+
+#Change Names
+
+for(i in 1:length(datalist)){
+  dum <- datalist[[i]]
+  lab <- colnames(dum)
+  lab1 <- lab[grepl('pAbO',lab)]
+  lab1 <- as.data.frame(stri_split_fixed(lab1,'.',4))
+  lab1 <- t(lab1)
+  lab2 <- paste0("ADT_",lab1[,1])
+  lab[grepl('pAbO',lab)] <- lab2
+  colnames(dum) <- lab
+  datalist[[i]] <- dum
+}
+```
+
+## Initialize Seurat Objects
+
+```{R}
+objlist <- list()
+
+for (i in 1:length(datalist)){
+  x <- datalist[[i]]
+  x <- t(x)
+  colnames(x) <- x[1,]
+  x <- x[-1,]
+  
+  # create sample label
+  lab <- paste0('h',i)
+  
+  # create wta-adt assay (main)
+  x1 <- CreateSeuratObject(counts = x, min.cells = 2, project = paste0('Healthy_Adult_BMMC_',i))
+  x1[['Sample']] <- paste0('Healthy',i)
+  
+  # subset data
+  wta <- x[!grepl('ADT_',rownames(x)),]
+  adt <- x[grepl('ADT_',rownames(x)),]
+  
+  # create a new assay to store ADT information
+  adt <- adt[,colnames(adt)%in%colnames(x1)]
+  assay <- CreateAssayObject(counts = adt)
+  x1[["ADT"]] <- assay
+  
+  # create a new assay to store WTA information
+  wta <- wta[,colnames(wta)%in%colnames(x1)]
+  assay <- CreateAssayObject(counts = wta)
+  x1[["WTA"]] <- assay
+  
+  # Standard workflow
+  DefaultAssay(x1) <- 'RNA'
+  x1 <- NormalizeData(x1) %>% FindVariableFeatures(selection.method = 'vst', nfeaturs = 5000) %>% ScaleData() %>% RunPCA()
+  
+  DefaultAssay(x1) <- 'WTA'
+  x1 <- NormalizeData(x1) %>% FindVariableFeatures(selection.method = 'vst', nfeaturs = 5000) %>% ScaleData() %>% RunPCA(reduction.name = 'wpca')
+  
+  DefaultAssay(x1) <- 'ADT'
+  VariableFeatures(x1) <- rownames(x1[["ADT"]])
+  x1 <- NormalizeData(x1, normalization.method = 'CLR', margin = 2) %>% ScaleData() %>% RunPCA(reduction.name = 'apca')
+  
+  objlist[[toupper(lab)]] <- x1
+  
+}
+
+# Standard Quality Control
+
+# Add percent mt
+
+for (i in 1:length(objlist)) {
+  dum <- objlist[[i]]
+  
+  DefaultAssay(dum) <- 'RNA'
+  dum[['percent.mt']] <- PercentageFeatureSet(dum, pattern = "^MT[.]")
+  objlist[[i]] <- dum
+}
+
+# subset 
+
+for (i in 1:length(objlist)) {
+  dum <- objlist[[i]]
+  mtlimit <- quantile(dum$percent.mt,0.99)
+  nflimit <- quantile(dum$nFeature_RNA,0.99)
+  dum = subset(x = dum, subset = nFeature_RNA > 200 & nFeature_RNA < nflimit & percent.mt < mtlimit)
+  objlist[[i]] <- dum
+}
+```
+
+## Doublet analysis
+
+Perform doublet discrimination as described here: https://github.com/chris-mcginnis-ucsf/DoubletFinder
+
+## Run SoupX
+
+Increase clustering
+
+```{r}
+for (i in 1:length(objlist)) {
+  dum <- objlist[[i]]
+  dum <- FindNeighbors(dum, dims = 1:10)
+  dum <- FindClusters(dum, resolution = 2)
+  objlist[[i]] <- dum
+}
+
+```
+
+Load Droplet Data
+
+```{r}
+droplist <- list()
+
+droplist[['H1']] <- read.table('Healthy1-Majeti-WTA-ADT_RSEC_MolsPerCell_Unfiltered.csv', sep = ",", header = T)
+droplist[['H2']]  <- read.table('Healthy2-Majeti-WTA-ADT_RSEC_MolsPerCell_Unfiltered.csv', sep = ",", header = T)
+droplist[['H3']]  <- read.table('Healthy3-Majeti-WTA-ADT_RSEC_MolsPerCell_Unfiltered.csv', sep = ",", header = T)
+```
+
+### SoupX workflow
+
+This was run sample by sample using the workflow described here: https://github.com/constantAmateur/SoupX. Markers for the WTA assay were determined based on standard workflow. ADT markers were selected based on tfidMin:
+
+Healthy 1: igGenes = c('ADT-CD10', 'ADT-CD20', 'ADT-CD33', 'ADT-CD19', 'ADT-CD93')
+
+Healthy 2: igGenes = c('ADT-CD10', 'ADT-CD14', 'ADT-CD93', 'ADT-CD86', 'ADT-CD11b')
+
+Healthy 3: igGenes = c('ADT-CD10', 'ADT-CD14', 'ADT-CD93', 'ADT-CD86', 'ADT-CD33')
+
+### Add corrected counts to each object
+
+A combined data table was created for both wta and adt counts, ie soupxwta and soupxadt
+
+```{R}
+for (i in 1:length(objlist)){
+
+    x1 = objlist[[i]]
+    
+    # create soupx wta table
+    cnts1 <- soupxwta[grepl(lab,names(soupxwta))][[1]]
+    cnts1 <- cnts1[,colnames(cnts1)%in%colnames(x1)]
+    
+    # create soupx adt table
+    cnts2 <- soupxadt[grepl(lab,names(soupxadt))][[1]]
+    cnts2 <- cnts2[,colnames(cnts2)%in%colnames(x1)]
+    
+    # create new assay to store soupx wta+adt information
+    cnts3 <- rbind(cnts1,cnts2)
+    assay <- CreateAssayObject(counts = cnts3)
+    x1[['soupx_counts']] <- assay
+    
+    # Standard workflow
+    
+    DefaultAssay(x1) <- 'soupx_counts'
+    x1 <- NormalizeData(x1) %>% FindVariableFeatures(selection.method = 'vst', nfeaturs = 5000) %>% ScaleData() %>% RunPCA(reduction.name = 'swapca')
+    
+    objlist[[toupper(lab)]] <- x1
+  
+}
+```
+
+## Combine Seurat Objects
+
+Integrate using SoupX corrected counts:
+
+```{r Integrate H1 and H3, warning = FALSE, results = 'hide'}
+options(future.globals.maxSize = 8000 * 1024^2)
+
+h.anchors1 = FindIntegrationAnchors(object.list = objlist, dims = 1:25, anchor.features = 5000, assay = rep('soupx_counts',length(names(objlist))))
+
+h.comp1 = IntegrateData(anchorset = h.anchors1, dims = 1:25, new.assay.name = "int.soupx.WTA.ADT")
+```
+
+## Remove heterotypic doublets and poor quality cells
+
+As described in the methods section, cells expressing two incompatible lineage markers were removed.
+
+Evaluate the following lineage markers:
+
+-   ADT-CD3
+-   ADT-CD235a-b
+-   ADT-CD19
+-   ADT-CD20
+-   ADT-CD33
+-   ADT-CD16
+-   ADT-CD56
+
+The following script was used as a guide to determine cut points for each marker:
+
+```{R}
+DefaultAssay(h.comp1) = 'int.soupx.WTA.ADT'
+df <- FetchData(h.comp1, 'ADT-CD3') # can expand to all ADT markers: rownames(h.comp1@assays[['ADT']])
+i = 1
+
+x <- df[[i]][df[[i]]>0] # remove drop out events
+m <- normalmixEM(x, k = 2)
+mixlist[[i]] <- m
+cut <- m$mu[2]-(m$mu[2]-m$mu[1])/(1/m$lambda[1]) 
+cutvalue[[i]] <- cut
+```
+
+Example script for removing identifying double positive cells
+
+```{R}
+DefaultAssay(h.comp1) <- 'int.soupx.WTA.ADT'
+marker1 <- 'ADT-CD3'
+marker2 <- 'ADT-CD19'
+lab <- paste0('dp_',marker1,'_',marker2)
+
+dum <- FetchData(h.comp1, c(marker1,marker2))
+dp <- dum[dum[,1]>cutvalue[[marker1]]&dum[,2]>cutvalue[[marker2]],]
+
+c <- rownames(dp)
+
+dp.cells <- subset(h.comp1, cells = c, invert = T)
+h.comp1.s <- subset(h.comp1, cells = c)
+```
+
+## Remove Lymphocytes
+
+Lymphocytes can be removed using UAMP coordinates
+
+Example script:
+
+```{r}
+p <- DimPlot(h.comp1.s, c(1,3))
+select.cells2 <- CellSelector(p) # collect non-lymphocyte clusters
+h.comp1.s <- subset(h.comp1.s, cells = select.cells2)
+```
+
+## Re-integrate data
+
+```{r}
+objlist <- SplitObject(h.comp1.s, split.by = 'Sample')
+```
+
+```{r}
+for(j in 1:length(objlist)){
+  dum <- objlist[[j]]
+  DefaultAssay(dum) <- 'soupx_counts'
+  dum <- FindVariableFeatures(dum, selection.method = 'vst', nfeatures = 5000)
+  objlist[[j]] <- dum
+}
+```
+
+Integrate the SoupX corrected counts:
+
+```{r Integrate H1 and H3, warning = FALSE, results = 'hide'}
+# options(future.globals.maxSize = 8000 * 1024^2)
+
+h.anchors1 = FindIntegrationAnchors(object.list = objlist, dims = 1:25, anchor.features = 5000, assay = rep('soupx_counts',length(names(objlist))))
+dum = IntegrateData(anchorset = h.anchors1, dims = 1:25, new.assay.name = "int_soupx_counts")
+
+reference_healthy_sc_dataset <- dum
+```
+
+## Save
+
+```{R}
+saveRDS(reference_healthy_sc_dataset,'reference_healthy_sc_dataset.rds')
+```
