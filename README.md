@@ -8,7 +8,7 @@
 > Hematopoietic multipotent progenitors (MPPs) regulate blood cell production to appropriately
 meet the biological demands of the human body. Human MPPs remain ill-defined whereas mouse MPPs have been well characterized with distinct immunophenotypes and lineage potencies. Using multiomic single cell analyses and complementary functional assays, we identified new human MPPs and oligopotent progenitor populations within Lin-CD34+CD38dim/lo adult bone marrow with distinct biomolecular and functional properties. These populations were prospectively isolated based on expression of CD69, CLL1, and CD2 in addition to classical markers like CD90 and CD45RA. We show that within the canonical Lin-CD34+CD38dim/loCD90-CD45RA- MPP population, there is a CD69+ MPP with long-term engraftment and multilineage differentiation potential, a CLL1+ myeloid-biased MPP, and a CLL1-CD69- erythroid-biased MPP. We also show that the canonical Lin-CD34+CD38dim/loCD90-CD45RA+ LMPP population can be separated into a CD2+ LMPP with lymphoid and myeloid potential, a CD2- LMPP with high lymphoid potential, and a CLL1+ GMP with minimal lymphoid potential. We used these new HSPC profiles to study human and mouse bone marrow cells and observe limited cell type specific homology between humans and mice and cell type specific changes associated with aging. By identifying and functionally characterizing new adult MPP sub-populations, we provide an updated framework for future studies in human hematopoiesis.
 
-### Markdown Scripts:
+### Markdown Scripts and Meta Data:
 Reference scripts for the analyses described in the mansucript can be found in the markdown_scripts folder.
 
 1. 01_PreProcessing_QC_Integration:
@@ -18,6 +18,8 @@ Reference scripts for the analyses described in the mansucript can be found in t
 3. 03_Cross_Sepcies:
 
 4. 04_Aging_Analysis:
+
+The meta data for the reference is provided in the RDS object below, and the meta data for the ARCHR project is located in the meta directory. 
 
 ### Access to Raw Data:
 > The raw data for the newly generated single cell data will be deposited in dbGaP under accession phs003690.v1.p1 and the processed UMI tables are available under GEO accession GSE262440.  
