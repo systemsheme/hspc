@@ -1,0 +1,294 @@
+---
+title: "03_Cross_Species"
+author: "Asiri Ediriwickrema"
+format: html
+editor: visual
+date: '2024-07-24'
+---
+
+## Introduction
+
+Example scripts are provided to perform the cross species analysis described in the manuscript.
+
+### Data sets
+
+A similar approach was used to analyze the following murine data sets:
+
+1.  GSE81682: Nestorowa
+2.  GSE175702: Konturek-Ciesla
+
+The scripts provided below reflect the analysis of data set #1.
+
+## Load Libraries
+
+```{r libraries, message = FALSE, warning = FALSE, results = 'hide'}
+loadlib=function(){
+  library('tidyverse')
+  library(cluster)    # clustering algorithms #use pimental/cluster for parallel
+  library(Seurat)
+  library(pals)
+  library(DoubletFinder)
+  library(plyr)
+  library(harmony)
+  library(corrplot)
+  library(biomaRt)
+  library(factoextra)
+  library(cluster)
+print("all lib loaded")
+}
+suppressMessages(loadlib())
+```
+
+## Load Murine Data
+
+```{r}
+cnts <- read.table('/path/to/counts/table.tsv', header = T, sep = '\t')
+```
+
+### Get Orthologs
+
+```{r}
+musGenes <- cnts$ID # confirm header based on data set
+
+# Basic function to convert mouse to human gene names
+
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl", host = "dec2021.archive.ensembl.org")
+mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl",host = "dec2021.archive.ensembl.org")
+
+# convert mouse ensbml to mouse gene names
+gene_IDs <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","mgi_symbol"),
+              values = musGenes, mart= mouse)
+
+gene_IDs <- gene_IDs[!duplicated(gene_IDs$ensembl_gene_id),]
+
+cnts2 <- cnts[cnts$ID%in%gene_IDs$ensembl_gene_id,]
+
+table(cnts2$ID==gene_IDs$ensembl_gene_id)
+
+cnts2$ID <- gene_IDs$mgi_symbol
+
+genesV2 = getLDS(attributes = c("mgi_symbol"), filters = "mgi_symbol", values = cnts2$ID , mart = mouse, attributesL = c("hgnc_symbol"), martL = human, uniqueRows=T)
+
+humanx <- unique(genesV2[, 2])
+```
+
+### Subset for genes that have human orthologs.
+
+```{r}
+cnts2 <- cnts2[cnts2$ID%in%genesV2$MGI.symbol,]
+```
+
+### Change names
+
+```{R}
+n <- as.character(cnts2$ID)
+h <- rep("",length(n))
+for(i in 1:length(n)){
+  h[i] <- genesV2[,2][genesV2$MGI.symbol==n[i][1]]
+}
+
+cnts2$ID <- h
+```
+
+### Create seurat object
+
+```{R}
+dum <- cnts2
+dum <- dum[!duplicated(dum$ID),]
+rownames(dum) <- dum$ID
+dum <- dum[,2:ncol(dum)]
+dum <- dum[,order(colnames(dum))]
+neo <- CreateSeuratObject(counts = dum, min.cells = 2, project = 'Nestorowa')
+```
+
+### QC
+
+```{r}
+neo[["percent.mt"]] = PercentageFeatureSet(neo, pattern = "^MT-")
+neo = subset(neo, nFeature_RNA > 4000 & percent.mt < 10) # 4000 and 10 was recommended by original paper methods for GSE81682: Nestorowa
+```
+
+### Run DoubletFinder
+
+Perform doublet discrimination as described here: https://github.com/chris-mcginnis-ucsf/DoubletFinder
+
+### Add metadata
+
+```{r}
+m <- read.table('path/to/metadata.tsv', header = T, sep = '\t') # original table was truncated for labels of interst. 
+lab <- m$Cell
+lab <- gsub('-','.',lab)
+rownames(m) <- lab
+m <- m[,2:ncol(m)]
+
+m <- m[rownames(m)%in%colnames(neo),]
+
+lab <- list()
+
+for (i in 1:nrow(m)){
+  c <- rownames(m)[i]
+  x <- colnames(m)[which(m[i,]==1)]
+  x <- gsub("_broad","",x)
+  x <- gsub("Projected","",x)
+  x <- x[!duplicated(x)]
+
+  if("TRUE"%in%as.character(grepl("ESLAM",x))){
+  x <- x[grepl('ESLAM',x)]
+  }
+  
+  if("TRUE"%in%as.character(grepl("1|2|3",x))){
+    x <- x[grepl("1|2|3",x)]
+  }
+  # 
+  if("TRUE"%in%as.character(grepl("HSC",x))){
+    x <- x[grepl('HSC',x)]
+  }
+  # 
+  
+  lab[[c]] <- x
+}
+
+lab2 <- plyr::ldply(lab, rbind)
+lab2 <- lab2[match(colnames(neo),lab2[,1]),]
+lab2 <- lab2[,2]
+#lab2 <- gsub("_broad","",lab2)
+lab2[is.na(lab2)] <- 'Unknown'
+lab2[lab2=='MPP1'] <- 'STHSC'
+lab2[lab2=='HSC1'] <- 'LTHSC'
+
+table(lab2)
+
+write.csv(lab2, 'labels.csv')
+
+neo[['cell_labels']] <- as.character(lab2)
+
+neo$cell_labels<- factor(neo$cell_labels, levels = c("LTHSC",
+                                "STHSC",
+                                "ESLAM",
+                                "MPP2",
+                                "MPP3",
+                                "LMPP",
+                                "MEP",
+                                "CMP",
+                                "GMP",
+                                "Unknown"))
+```
+
+Subset to include only HSPCs.
+
+```{r}
+neo <- subset(neo, subset = cell_labels %in% c('ESLAM','LTHSC', 'STHSC', 'MPP2', 'MPP3', 'LMPP'))
+```
+
+### Integrate subset data with healthy single cell reference data set
+
+```{R}
+reference_healthy_sc_dataset <- readRDS('reference_healthy_sc_dataset.rds')
+```
+
+```{r}
+DefaultAssay(reference_healthy_sc_dataset) <- 'soupx_wta_only'
+objlist1 = SplitObject(reference_healthy_sc_dataset, split.by = 'sample')
+
+# split neo based on HSPC/Prog/LT-HSC (used in the paper as categorical value to remove batch effect)
+
+objlist2 <- SplitObject(neo, split.by = 'orig.ident')
+
+objlist3 <- c(objlist1, objlist2)
+```
+
+Integrate with all cell types
+
+```{r}
+options(future.globals.maxSize= 4891289600)
+
+h2.anchors = FindIntegrationAnchors(object.list = objlist3, anchor.features = 2000, assay = c(rep('soupx_wta_only',3),rep('RNA',3)))
+
+cross = IntegrateData(anchorset = h2.anchors)
+```
+
+Add labels for GSE81682_Nestorowa
+
+```{r}
+lab<- cross$cell_labels
+
+lab[cross$cell_labels=='LTHSC'] <- 'Mouse_LTHSC'
+lab[cross$cell_labels=='STHSC'] <- 'Mouse_STHSC'
+lab[cross$cell_labels=='ESLAM'] <- 'Mouse_ESLAM'
+lab[cross$cell_labels=='MPP2'] <- 'Mouse_MPP2'
+lab[cross$cell_labels=='MPP3'] <- 'Mouse_MPP3'
+lab[cross$cell_labels=='LMPP'] <- 'Mouse_LMPP'
+lab[cross$cell_labels=='CMP'] <- 'Mouse_CMP'
+lab[cross$cell_labels=='GMP'] <- 'Mouse_GMP'
+lab[cross$cell_labels=='MEP'] <- 'Mouse_MEP'
+lab[cross$cell_labels=='Unknown'] <- 'Mouse_Unknown'
+table(lab)
+
+cross$cross_labels <- lab
+```
+
+Subset HSPCs
+
+```{r}
+neo2 <- subset(cross, subset = cross_labels%in%c('HSC', 'MPP1', 'MPP2', 'LMP', 'GMP1', 'GMP2', 'GMP3', 'Mouse_LTHSC','Mouse_ESLAM', 'Mouse_STHSC', 'Mouse_MPP2', 'Mouse_MPP3', 'Mouse_LMPP', 'Mouse_MEP', 'Mouse_CMP', 'Mouse_GMP'))
+```
+
+Re-integrate
+
+```{r}
+lab <- neo2$orig.ident
+
+lab[lab == 'HSPC'] <- 'Neo_HSPC'
+lab[lab == 'LT.HSC'] <- 'Neo_LTHSC'
+lab[lab == 'Prog'] <- 'Neo_Proj'
+neo2$orig.ident2 <- lab
+
+# downsample
+Idents(neo2) <- neo$cross_labels2
+neo2 = subset(neo2, downsample = mean(table(neo2$cross_labels)))
+objlist3 <- SplitObject(neo2, split.by = 'orig.ident2')
+```
+
+```{r}
+options(future.globals.maxSize= 4891289600)
+
+h2.anchors = FindIntegrationAnchors(object.list = objlist3, anchor.features = 2000, assay = c(rep('soupx_WTA',3),rep('RNA',3)) )
+
+cross2 = IntegrateData(anchorset = h2.anchors)
+
+DefaultAssay(object = cross2) <- "integrated"
+```
+
+Estimate optimal cluster number using gap stat. This was performed over multiple iterations to estimate optimal cluster number.
+
+```{R}
+library(Seurat)
+library(cluster)
+
+seed = 6 # vary seed as needed
+set.seed(seed)
+Idents(cross2) <- cross2$orig.ident2
+test <- subset(cross2, downsample = 50)
+intassay <- 'integrated'
+  
+d <- (t(as.matrix(test@assays[[intassay]]@data))) 
+d <- d[,1:1000] #top 1000 features
+wss <- clusGap(d, FUN = kmeans, nstart = 25, K.max = min((dim(d)[1]-1),20), B = 100, d.power = 2)
+
+print(fviz_gap_stat(wss, maxSE = list(method = "Tibs2001SEmax", SE.factor = 1), linecolor  = 'black')+ ggtitle(intassay))
+```
+
+Cluster original data using Seurat to target optimal cluster number
+
+```{r}
+DefaultAssay(cross2) <- 'integrated'
+cross2 <- FindClusters(cross2, resolution = 0.73) 
+```
+
+### Find conserved markers:
+
+Conserved markers were determined using the following reference: https://hbctraining.github.io/scRNA-seq_online/lessons/09_merged_SC_marker_identification.html
+
+### Additional analyses:
+
+Please refer to the methods section for details on performing the additional analyses.
