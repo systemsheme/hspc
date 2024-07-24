@@ -1,0 +1,349 @@
+---
+title: "02_Mixed_Model_Classifier"
+author: "Asiri Ediriwickrema"
+format: html
+editor: visual
+date: "2024-07-24"
+---
+
+## Introduction
+
+The mixed model classifier uses the scPred framework (ref: https://github.com/powellgenomicslab/scPred) for cell annotation transfer. The function provided below has been optimized for the single cell reference dataset. 
+
+## Function
+
+The script provided in the following chunk should be saved as it's own R file, e.g. "run_mixedmodel.R". 
+
+```{R}
+args <- commandArgs(TRUE)
+#
+print(args[1])
+print(args[2])
+
+nclusters <- as.numeric(args[2])
+print(nclusters)
+
+run_mixedmodel<-function(objpath, nclusters){
+
+  "
+  Parameters:
+  -----------
+  objpath: path to seurat object (rds) to classify with scPred
+  nclusters: number of clusters 
+
+  Output:
+  -------
+  object with new scpred labels.
+  f1 for each sample within object
+  unknown fractions for each sample within object
+
+  Commands Run:
+  ------------
+  [1] Rscript run_mixedmodel.R path/to/seurat/object 4
+  "
+  # Initiate clusters
+  cl <- makePSOCKcluster(nclusters)
+  registerDoParallel(cl)
+  
+  # load data object
+  obj <- readRDS(objpath)
+
+  # get query obj label
+
+  d <- str_split(objpath,"/")
+  objlab <- d[[1]][length(d[[1]])]
+  objlab <- str_split_fixed(objlab,"[.]",2)[1]
+
+  # split into samples
+  objlist <- SplitObject(obj, 'orig.ident')
+
+  # create storage lists
+
+  f1obj <- list() # list of full f object
+  fvec <- list() # list of f1-scores
+  unvec <- list() # list of unassigned
+  unvecratio <- list() # list of unassigned normalized to total cell #
+  scpredlabels <- list() # list of prediction labels
+  
+  # set nfold
+  nfold = 10
+
+  for (j in 1:length(objlist)) {
+    query1 <- objlist[[j]]
+    samplelabel <- unique(query1$orig.ident) # individual sample label
+
+    print(paste('starting', samplelabel))
+
+    for(i in seq(1:nfold)){
+      
+      # set.seed(i)
+
+      print(paste('starting iteration:',i))
+
+      c <- sample(names(reference$orig.ident), 0.90*ncol(reference))
+      train <- subset(reference, cells = c)
+      test <- subset(reference, cells = c, invert = T)
+
+      DefaultAssay(train) <- 'RNA'
+      DefaultAssay(test) <- 'RNA'
+
+      train <- NormalizeData(train, verbose = F)
+      train <- FindVariableFeatures(train, verbose = F)
+      train <- ScaleData(train, verbose = F)
+      train <- RunPCA(train, npcs = min(dim(query1)[2],21) -1, verbose = F)
+
+      l <- as.character(train$cell_labels)
+      l <- factor(l, levels = c('HSC',
+                            'MPP',
+                            'EMPP',
+                            'LMPP1',
+                            'ProgB',
+                            'LMPP2',
+                            'GMP',
+                            'ProBEM',
+                            'Pre_Mono_DC',
+                            'DC',
+                            'Mono_CD14',
+                            'Mono_CD16',
+                            'ProEry',
+                            'IntEry',
+                            'LateEry'))
+      
+      train[['cell_type']] <- l
+
+      # Train classifier
+
+      print('training classifier for train')
+
+      train <- getFeatureSpace(train, "cell_type")
+      train <- trainModel(train, allowParallel = T, model = 'svmRadial')
+      train <- trainModel(train, model = "avNNet", reclassify = c("EMPP", 'LMPP2', 'ProBEM', 'Mono_CD14', 'Mono_CD16'), allowParallel = T)
+      train <- trainModel(train, model = "glm", reclassify = c("ProgB", 'GMP'), allowParallel = T)
+
+
+      # predict labels in sample
+
+      print('predicting labels in sample')
+
+      DefaultAssay(query1) <- 'RNA'
+      query1 <- NormalizeData(query1)
+      query1 <- scPredict(query1, train, recompute_alignment = T)
+      un <- 0
+      try(un <- as.numeric(table(query1$scpred_prediction)['unassigned'])) # store # unassiged.
+      totalcells <- dim(query1)[2] # total # of cells
+      Idents(query1) <- query1$scpred_prediction
+      try(query <- subset(query1, idents = 'unassigned', invert = T))
+
+      # remove clusters with low cell #
+      clrem <- names(which(table(query$scpred_prediction)<4))
+      Idents(query) <- query$scpred_prediction
+      cells <- WhichCells(query, idents = clrem)
+
+      if(min(table(query$scpred_prediction))<4){
+        try(query <- subset(query, cells = cells, invert = T))
+      }
+
+      # use pred labels from query to predict labels for test
+
+      print('using sample to predict labels in test')
+
+      try(query <- NormalizeData(query, verbose = F))
+      try(query <- FindVariableFeatures(query, verbose = F))
+      try(query <- ScaleData(query, verbose = F))
+      try(query <- RunPCA(query, npcs = min(dim(query)[2],21)-1, verbose = F))
+
+      if(dim(table(query$scpred_prediction)) > 1 & min(table(query$scpred_prediction))>=4){
+
+        print(table(query$scpred_prediction))
+
+        query <- getFeatureSpace(query, "scpred_prediction")
+
+        print('step 1: train model')
+        query <- trainModel(query, allowParallel = T, model = 'svmRadial')
+
+        print('step 2: reclassify')
+
+        #Will relassify in steps in case certain cell types fell out
+        
+        # avNNet
+        try(query <- trainModel(query, model = "avNNet", reclassify = c('EMPP'), allowParallel = T))
+        try(query <- trainModel(query, model = "avNNet", reclassify = c('LMPP2'), allowParallel = T))
+        try(query <- trainModel(query, model = "avNNet", reclassify = c('ProBEM'), allowParallel = T))
+        try(query <- trainModel(query, model = "avNNet", reclassify = c('Mono_CD14'), allowParallel = T))
+        try(query <- trainModel(query, model = "avNNet", reclassify = c('Mono_CD16'), allowParallel = T))
+        
+        # glm
+        try(query <- trainModel(query, model = "glm", reclassify = c('ProgB'), allowParallel = T))
+        try(query <- trainModel(query, model = "glm", reclassify = c('GMP'), allowParallel = T))
+    
+        print(get_scpred(query))
+
+        # predict labels in test sample
+
+        DefaultAssay(test) <- 'RNA'
+        test <- NormalizeData(test)
+        test <- scPredict(test, query, recompute_alignment = T)
+
+        # compared predicted and true labels
+        l <- as.character(test$cell_labels)
+        l <- factor(l, levels = c('HSC',
+                            'MPP',
+                            'EMPP',
+                            'LMPP1',
+                            'ProgB',
+                            'LMPP2',
+                            'GMP',
+                            'ProBEM',
+                            'Pre_Mono_DC',
+                            'DC',
+                            'Mono_CD14',
+                            'Mono_CD16',
+                            'ProEry',
+                            'IntEry',
+                            'LateEry'))
+
+        test[['true_labels']] <- l
+
+        test$scpred_prediction <- factor(test$scpred_prediction, levels = c('HSC',
+                            'MPP',
+                            'EMPP',
+                            'LMPP1',
+                            'ProgB',
+                            'LMPP2',
+                            'GMP',
+                            'ProBEM',
+                            'Pre_Mono_DC',
+                            'DC',
+                            'Mono_CD14',
+                            'Mono_CD16',
+                            'ProEry',
+                            'IntEry',
+                            'LateEry'))
+
+        print('assigned labels on test datasest')
+
+        f1_bm <- confusionMatrix(test$scpred_prediction, test$true_labels, mode = 'everything', positive = '1')
+
+        iterlab <- paste(samplelabel, i, sep = '_')
+
+        f1obj[[iterlab]] <- f1_bm
+        fvec[[samplelabel]][i] <- f1_bm$overall[1]
+        unvec[[samplelabel]][i] <- un
+        unvecratio[[samplelabel]][i] <- un/totalcells
+      }
+
+      else {
+        f1obj[[iterlab]] <- NA
+        fvec[[samplelabel]][i] <- NA
+        unvec[[samplelabel]][i] <- NA
+        unvecratio[[samplelabel]][i] <- NA
+      }
+
+
+      print('fscores:')
+      print(fvec)
+
+      print('unassigned:')
+      print(unvecratio)
+
+      print(paste("finished", samplelabel, "iteration", i))
+
+      }
+
+    # create final cell calls using the entire reference dataset and a prob threshold of 0.75!
+
+    print("creating final cell labels using entire dataset")
+
+    reference <- NormalizeData(reference, verbose = F)
+    reference <- FindVariableFeatures(reference, verbose = F)
+    reference <- ScaleData(reference, verbose = F)
+    reference <- RunPCA(reference, npcs = min(dim(query)[2],21) -1, verbose = F)
+
+    l <- as.character(reference$cell_labels)
+    l <- factor(l, levels = c('HSC',
+                            'MPP',
+                            'EMPP',
+                            'LMPP1',
+                            'ProgB',
+                            'LMPP2',
+                            'GMP',
+                            'ProBEM',
+                            'Pre_Mono_DC',
+                            'DC',
+                            'Mono_CD14',
+                            'Mono_CD16',
+                            'ProEry',
+                            'IntEry',
+                            'LateEry'))
+
+    reference[['cell_type']] <- l
+
+    # Train classifier
+    reference <- getFeatureSpace(reference, "cell_type")
+    reference <- trainModel(reference, allowParallel = T, model = 'svmRadial')
+    reference <- trainModel(reference, model = "avNNet", reclassify = c("EMPP", 'LMPP2', 'ProBEM', 'Mono_CD14', 'Mono_CD16'), allowParallel = T)
+    reference <- trainModel(reference, model = "glm", reclassify = c("ProgB", 'GMP'), allowParallel = T)
+    
+    # predict labels
+    query <- objlist[[j]]
+    DefaultAssay(query) <- 'RNA'
+    query <- NormalizeData(query)
+    query <- scPredict(query, reference, recompute_alignment = T, threshold = 0.75)
+
+    scpredlabels[[samplelabel]] <- query$scpred_prediction
+
+    saveRDS(f1obj, paste(objlab,'f1obj.rds',sep = '_'))
+    saveRDS(fvec, paste(objlab,'fscores.rds',sep = '_'))
+    saveRDS(unvec, paste(objlab,'unknown.rds',sep ='_'))
+    saveRDS(unvecratio, paste(objlab,'unknownratio.rds', sep ='_'))
+    saveRDS(query, paste(samplelabel,'scpred_seuratobj.rds',sep = '_'))
+    saveRDS(scpredlabels, paste(objlab,'scpredlabels.rds',sep = '_'))
+
+    t2 <- Sys.time()
+    print('time used:')
+    print(t2-t1)
+    print('all files saved')
+    }
+
+  stopCluster(cl)
+  
+  } # end of function
+
+
+# load libraries
+
+loadlib=function(){
+  library(Seurat)
+  library(tidyverse)
+  library(stringi)
+  library(doParallel)
+  library(future)
+  library(scPred)
+  library(caret)
+  library(stringr)
+  print("all lib loaded")
+}
+suppressMessages(loadlib())
+
+# set max global file size
+options(future.globals.maxSize = 8000 * 1024^2)
+
+# load reference
+print('loading reference')
+
+hspc.comp1 <- readRDS('reference_healthy_sc_dataset.rds')
+
+print('removing adts')
+
+# create reference seurat obj without adts
+m <- as.matrix(hspc.comp1@assays$RNA@counts)
+m <- m[!grepl('ADT',rownames(m)),]
+reference <- CreateSeuratObject(m, min.cells = 3, min.features = 200)
+reference$cell_labels <- hspc.comp1@meta.data[["cell_labels"]]
+
+# set up parallel in Seurat
+plan("multicore", workers = nclusters)
+
+t1 <- Sys.time()
+run_mixedmodel(args[1], nclusters)
+```
