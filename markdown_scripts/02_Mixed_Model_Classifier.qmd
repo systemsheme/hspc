@@ -8,7 +8,7 @@ date: "2024-07-24"
 
 ## Introduction
 
-The mixed model classifier uses the scPred framework (ref: https://github.com/powellgenomicslab/scPred) for cell annotation transfer. The function provided below has been optimized for the single cell reference dataset. 
+The mixed model classifier uses the scPred framework (ref: https://github.com/powellgenomicslab/scPred) for cell annotation transfer. The function provided below has been optimized for the single cell reference data set. Please reference both scPred (Alquicira-Hernandez et al, Genome Biol 20, 264 2019) and this study if you find this classifier helpful. 
 
 ## Function
 
