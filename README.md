@@ -24,4 +24,7 @@ Reference scripts for the analyses described in the mansucript can be found in t
 
 ### Processed Data
 [**Link to reference single cell dataset:** ](https://figshare.com/s/2b8429eaaa1d4e38f480)
-> The RNA assay contains the original WTA and ADT counts. The ADT assay contains the original ADT counts. The soupx_counts assay contains SoupX corrected WTA and ADT counts while the soupx_wta_only assay contains SoupX corrected RNA counts. 
+> The RNA assay contains the original WTA and ADT counts. The ADT assay contains the original ADT counts. The soupx_counts assay contains SoupX corrected WTA and ADT counts while the soupx_wta_only assay contains SoupX corrected RNA counts.
+
+### Additional Comments
+> Please contact the authors with questions and or requests for additional data. 
