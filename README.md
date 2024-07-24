@@ -11,14 +11,6 @@ meet the biological demands of the human body. Human MPPs remain ill-defined whe
 ### Markdown Scripts and Meta Data:
 Reference scripts for the analyses described in the mansucript can be found in the markdown_scripts folder.
 
-1. 01_PreProcessing_QC_Integration:
-
-2. 02_Mixed_Model_Classifier:
-
-3. 03_Cross_Sepcies:
-
-4. 04_Aging_Analysis:
-
 The meta data for the reference is provided in the RDS object below, and the meta data for the ARCHR project is located in the meta directory. 
 
 ### Access to Raw Data:
