@@ -1,0 +1,289 @@
+---
+title: "04_Aging_Analysis"
+author: "Asiri Ediriwickrema"
+format: html
+editor: visual
+date: '2024-07-24'
+---
+
+## Introduction
+
+Example scripts are provided for performing the aging analysis described in the manuscript.
+
+## Load Libraries
+
+```{r "Load data", warning=FALSE, hide=TRUE, comment=FALSE, message=FALSE, results=FALSE}
+
+loadlib=function(){
+  library(Seurat)
+  library(caret)
+  library(tidyverse)
+  library(rstatix)
+  library(meshes)
+  library(glmnet)
+  library(randomForest)
+  library(randomForestExplainer)
+  library(modelr)
+  library(edgeR)
+  library(limma)
+  library(Glimma)
+  library(sva)
+  library(leaps)
+  library(mlbench)
+  library(Hmisc)
+  library(doParallel)
+  library(reticulate)
+  library(clusterProfiler)
+  library(ReactomePA)
+  print("all lib loaded")
+}
+suppressMessages(loadlib())
+
+```
+
+## External Data Set Annotation and Integration
+
+Each data set (refer to Supplemental Table 12) was annotated using the mixed model classifier and integrated by cell type. Here is an example script of how to subset and integrate the data.
+
+Step 1: Take each scPred Seurat object (output from mixed model classifier) and subset by annotation.
+
+```{r}
+objlist <- aging_objlist # create a list from the output described above
+
+# set up lists for each subset
+hsclist <- list()
+mpp1list <- list()
+mpp2list <- list()
+lmplist <- list()
+gmplist <- list()
+probemlist <- list()
+
+for (i in 1:length(objlist)){
+  
+  dum <- objlist[[i]]
+  lab <- unique(dum$orig.ident)
+  
+  print(paste('starting', lab))
+  
+  Idents(dum) <- dum$scpred_mixedmodel
+  
+  try(hsclist[[lab]] <- subset(dum, idents = 'HSC'))
+  try(mpp1list[[lab]] <- subset(dum, idents = 'MPP1'))
+  try(mpp2list[[lab]] <- subset(dum, idents = 'MPP2'))
+  try(lmplist[[lab]] <- subset(dum, idents = 'LMP'))
+  try(gmplist[[lab]] <- subset(dum, idents = 'GMP'))
+  try(probemlist[[lab]] <- subset(dum, idents = 'ProBEM'))
+  
+  print(paste('finishing', lab))
+}
+
+scpredlist <- list('hsc' = hsclist,
+                   'mpp1' = mpp1list,
+                   'mpp2' = mpp2list,
+                   'lmp' = lmplist,
+                   'gmp1' = gmp1list,
+                   'probem' = probemlist)
+```
+
+Step 2: Add each specific cell type from the reference data set to each list.
+
+Step 3: Remove samples with \< 20 cells to enable integration with Seurat CCA.
+
+Step 4: Perform integration by cell type
+
+```{r}
+options(future.globals.maxSize= 11000 * 1024^2)
+
+listofints <- list()
+
+for (i in 1:length(scpredlist)){
+  
+  lab1 <- names(scpredlist)[i]
+  objlist <- scpredlist[[i]]
+  
+  print(paste('starting',lab1))
+  
+  h2.anchors = FindIntegrationAnchors(object.list = objlist, 
+                                      dims = 1:15, 
+                                      anchor.features = 10000, 
+                                      k.filter = 15, 
+                                      k.anchor = 5, 
+                                      k.score = 15, 
+                                      assay = rep('RNA',length(objlist)), 
+                                      reference = length(objlist), 
+                                      verbose = T) # including av reference for the integration was required since we are integrating so many data sets. 
+  
+  dum = IntegrateData(anchorset = h2.anchors, dims = 1:15, k.weight = 15, verbose = T) 
+  
+  DefaultAssay(object = dum) <- "integrated"
+  dum = ScaleData(dum, verbose = F)
+  dum = RunPCA(dum, npcs = 15, verbose = F)
+  dum = RunUMAP(dum, reduction = 'pca', dims = 1:15, n.components = 3, verbose = F)
+  dum = FindNeighbors(dum, reduction = 'pca', dims = 1:15, verbose = F)
+  dum = FindClusters(dum, resolution = 1, verbose = F)
+  
+  lab <- paste0(lab1,"_integrated_npcs-15.rds")
+  
+  listofints[[lab1]] <- dum
+}
+```
+
+Step 5: Integrate all cells
+
+Of note, erythroids, plasmacytoid dendritic cells, and unassigned cells were removed from this integration. Individual Seurat objects were down sampled to n=1000 to facilitate integration.
+
+The following integration is resource intensive.
+
+```{r}
+options(future.globals.maxSize= 8000 * 1024^2)
+
+n = 150
+
+cca_anchors <- FindIntegrationAnchors(object.list = aging_objlist, 
+                                      dims = 1:15, 
+                                      anchor.features = 10000, 
+                                      k.filter = n, 
+                                      k.anchor = 5, 
+                                      k.score = min(n,30), 
+                                      assay = rep('RNA',length(aging_objlist)), 
+                                      reference = c(4,5,6,9,12,18,21)) 
+
+CCA <- IntegrateData(anchorset = cca_anchors, dims = 1:15, k.weight = min(100,n), verbose = T)
+```
+
+## Aging Analysis
+
+### Spearman Correlation
+
+Each data set was originally annotated to contain the age variable.
+
+Step 1: Prepare Data
+
+```{R}
+x <- GetAssayData(CCA, slot = 'scale.data', assay = 'integrated')
+y <- CCA$age
+h <- data.frame('age' = y, t(x))
+```
+
+Step 2: Analyze data
+
+```{R}
+gene_expression_matrix <- x
+sample_ages <- y
+
+# Create weights 
+t <- table(y)
+weights <- rep(1,length(y))
+for(i in 1:length(weights)){
+  a <- as.character(y[i])
+  w <- as.numeric(t[names(t) == a])/sum(t)
+  weights[i] <- w
+}
+
+# Function to calculate weighted Spearman correlation
+weighted_spearman <- function(x, y, weights) {
+  cor.test(x, y, method = "spearman", exact = FALSE, alternative = "two.sided", weights = weights)$estimate
+}
+
+weighted_spearman_p <- function(x, y, weights) {
+  cor.test(x, y, method = "spearman", exact = FALSE, alternative = "two.sided", weights = weights)$p.value
+}
+
+# Apply the function to each row (gene) in the gene expression matrix
+gene_correlations <- apply(gene_expression_matrix, 1, function(gene_values) {
+  weighted_spearman(gene_values, sample_ages, weights)
+})
+
+gene_correlations_p <- apply(gene_expression_matrix, 1, function(gene_values) {
+  weighted_spearman_p(gene_values, sample_ages, weights)
+})
+
+# Convert the result to a data frame for better readability
+result_df <- data.frame(Gene = rownames(gene_expression_matrix), Weighted_Spearman = gene_correlations)
+
+p_result_df <- data.frame(Gene = rownames(gene_expression_matrix), Weighted_Spearman_p = gene_correlations_p)
+
+p_result_df$adj_pval <- p.adjust(p_result_df$Weighted_Spearman_p, method = "BH")
+
+# Print the result
+print(result_df)
+print(p_result_df)
+
+df <- data.frame('Gene' = result_df$Gene, 'Weighted_Spearman' = result_df$Weighted_Spearman, 'adj_pval' = p_result_df$adj_pval)
+
+print(df[order(df$Weighted_Spearman, decreasing = T),])
+
+# subset for significance
+df2 <- df[df$adj_pval<0.05,]
+
+# subset for cor > 0.05
+df3 <- df2[df2$Weighted_Spearman >= 0.05,]
+df4 <- df2[df2$Weighted_Spearman <= -0.05,]
+
+cf1 <- rbind(df3,df4)
+```
+
+Step 3: Enrichment analysis was performed using clusterProfiler with genes in cf1.
+
+### RFE Analysis
+
+Here is an example for how to run the RFE analysis using random forest models.
+
+Step 1: Set up data. Target \< 9400 cells per cell type. The object "dum" below represents a cell type specific Seurat object.
+
+```{r}
+set.seed(1)
+
+Idents(dum) <- dum$orig.ident
+dum2 <- subset(dum, downsample = 500)
+
+x <- GetAssayData(dum2, slot = 'scale.data', assay = 'integrated')
+y <- dum2$age
+h <- data.frame('age' = y, t(x))
+
+# subset important genes, i.e. origial_gene_list
+h <- h[,names(h)%in%c('age',names(original_gene_list))]
+
+# split into train and test datasets
+parts = createDataPartition(h$age, p = .66, list = F)
+train = h[parts, ]
+test = h[-parts, ]
+x_train = train[,-1]
+y_train = train[,1]
+
+x_test <- test[,-1]
+y_test <- test[,1]
+
+# set # of vars
+v <- 100
+```
+
+Step 2: Run RFE using random forest models. The following script is resource intensive.
+
+```{r}
+set.seed(1)
+
+cl <- makePSOCKcluster(detectCores()-4)
+registerDoParallel(cl)
+
+subsets <- c(1:v)
+
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "cv",
+                   number =  10,
+                   allowParallel = T)
+
+rfProfile <- rfe(x_train,y_train,
+                 sizes = subsets,
+                 rfeControl = ctrl)
+
+stopCluster(cl)
+
+predictors(rfProfile)
+```
+
+Step 3: Evaluate model performance on the test data set.
+
+```{r}
+postResample(predict(rfProfile, x_test), y_test)
+```
