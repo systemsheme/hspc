@@ -19,9 +19,9 @@ Reference scripts for the analyses described in the mansucript can be found in t
 
 4. 04_Aging_Analysis:
 
+### Data Acess
+> The raw data for the newly generated single cell data will be deposited in dbGaP under accession phs003690.v1.p1 and the processed UMI tables are available under GEO accession GSE262440.  
 
-**Data Access:** The raw data for the newly generated single cell data will be deposited in dbGaP under accession phs003690.v1.p1 and the processed UMI tables are available under GEO accession GSE262440.  
-
+### Processed Data
 [**Link to reference single cell dataset:** ](https://figshare.com/s/2b8429eaaa1d4e38f480)
-
-
+> The RNA assay contains the original WTA and ADT counts. The ADT assay contains the original ADT counts. The soupx_counts assay contains SoupX corrected WTA and ADT counts while the soupx_wta_only assay contains SoupX corrected RNA counts. 
