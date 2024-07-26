@@ -53,9 +53,9 @@ d.  Add SoupX corrected assays
 ```{R}
 datalist <- list()
 
-datalist[['h1']] <- read.table('Healthy1-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
-datalist[['h2']]  <- read.table('Healthy2-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
-datalist[['h3']]  <- read.table('Healthy3-Majeti-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+datalist[['h1']] <- read.table('Healthy1-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+datalist[['h2']]  <- read.table('Healthy2-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
+datalist[['h3']]  <- read.table('Healthy3-WTA-ADT_RSEC_MolsPerCell.csv', sep = ",", header = T)
 
 #Change Names
 
